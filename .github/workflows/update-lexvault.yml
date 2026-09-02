@@ -1,0 +1,31 @@
+name: update-lexvault
+
+# 定时增量更新全国人大库数据（日期窗口增量，幂等 upsert）
+# 触发：每天 22:00 UTC（北京 06:00），可手动触发
+
+on:
+  schedule:
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run incremental update
+        run: |
+          python3 scripts/update.py --db db/lexvault.db --days 7
+
+      - name: Commit & push updated db
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f db/lexvault.db
+          git diff --cached --quiet || git commit -m "chore: update lexvault db $(date -u +%F)"
+          git push

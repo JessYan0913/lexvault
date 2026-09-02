@@ -1,0 +1,6 @@
+# lexvault 依赖
+# 运行时（查询/采集）
+# MCP 查询服务需要 mcp（含 fastmcp）；采集仅用标准库 urllib + zipfile
+mcp>=1.0
+# 测试
+pytest>=8.0
