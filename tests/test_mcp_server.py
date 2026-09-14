@@ -1,7 +1,8 @@
 """MCP 查询服务端到端验证：启动 stdio server → 调用 search_local / stats。
 
-用法：
-    /Users/yanheng/law-crawler-mcp/.venv/bin/python3 tests/test_mcp_server.py
+用法（cwd 无关，从任何目录运行均可）：
+    /Users/yanheng/Documents/学习/涉外法律/lexvault/.venv/bin/python3 \
+      /Users/yanheng/Documents/学习/涉外法律/lexvault/tests/test_mcp_server.py
 """
 import asyncio
 import json
@@ -14,7 +15,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 SERVER = [
-    sys.executable, "-m", "lexvault.mcp.server",
+    sys.executable,
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "run_mcp.py"),
 ]
 
 
@@ -22,7 +24,6 @@ async def main() -> int:
     params = StdioServerParameters(
         command=SERVER[0],
         args=SERVER[1:],
-        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         env={**os.environ, "LEXVAULT_DB": os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "db", "lexvault.db")},
     )

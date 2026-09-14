@@ -79,9 +79,18 @@ def _section_to_dict(s: dict) -> dict:
 def search_local(query: str, limit: int = 10, jurisdiction: str | None = None) -> dict:
     """从本地法律库按全文检索条文（FTS5 trigram + LIKE 兜底，支持中文子串匹配）。
 
-    query 为检索词（可含空格/标点，多词取 AND）；jurisdiction 传法域代码（如 cn）可过滤；
-    limit 限制返回条数（默认 10，最多 50）。
-    返回条文级命中：法规标题、条号、正文、效力状态、法域、版本。
+    本地库已收录（优先查这里，通常无需联网）：
+    - cn 中国法：宪法/法律/行政法规/司法解释（民法典、仲裁法、民事诉讼法涉外编、
+      涉外民事关系法律适用法等）+ 国际公约全文（纽约公约、CISG、UNCITRAL 示范法、
+      海牙送达/取证/Apostille 认证公约）
+    - us / us_code 美国法：CFR（出口管制 EAR、金融制裁 31CFR、ITAR）+ 美国法典核心 Title
+    - us_ofac / eu_sanctions / uk_sanctions：美/欧/英三大制裁名单实体（企业出海合规筛查）
+    - eu 欧盟核心法规（制裁条例、双重用途出口管制、GDPR 等）
+
+    用法：query 为检索词（可含空格/标点，多词取 AND）；支持“第X条”条文号精确定位
+    （自动兼容中文/阿拉伯数字）；jurisdiction 传法域代码（cn/us/us_code/us_ofac/
+    eu_sanctions/uk_sanctions/eu）可过滤；limit 限制返回条数（默认 10，最多 50）。
+    返回条文级命中：法规标题、条号、正文、效力状态、法域、发布机关、来源。
     """
     try:
         n = min(max(limit, 1), MAX_ITEMS)
@@ -113,6 +122,25 @@ def get_sections(doc_id: str, limit: int = 200) -> dict:
         return _ok(rows, len(rows))
     except Exception as exc:  # noqa: BLE001
         logger.exception("get_sections failed")
+        return _err(str(exc))
+
+
+@mcp.tool()
+def get_citations(doc_id: str, section_no: str, direction: str = "out", limit: int = 20) -> dict:
+    """条文交叉引用查询（法律引用链追踪）。
+
+    direction=out：该条文正文引用了哪些条文（出向）；
+    direction=in：同文档内哪些条文引用了给定条文（入向）。
+    """
+    try:
+        store = _get_store()
+        if direction == "in":
+            rows = store.get_citation_in(doc_id, section_no, limit=min(max(limit, 1), 100))
+            return _ok(rows, len(rows))
+        rows = store.get_citation_out(doc_id, section_no)
+        return _ok(rows, len(rows))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("get_citations failed")
         return _err(str(exc))
 
 

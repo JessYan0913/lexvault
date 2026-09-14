@@ -10,6 +10,9 @@ venv/
 db/*.db
 db/*.db-wal
 db/*.db-shm
+db/*.db.bak*
+db/*.bak*
+backups/
 
 # 环境变量
 .env

@@ -48,7 +48,7 @@ python3 scripts/update.py --dry-run   # 预览
 python3 scripts/update.py             # 实际入库
 
 # 4) 启动 MCP 服务（stdio）
-LEXVAULT_DB=db/lexvault.db python3 -m lexvault.mcp.server
+LEXVAULT_DB=db/lexvault.db python3 run_mcp.py
 ```
 
 ### 客户端接入 MCP（Claude / Cursor / 任意 MCP 客户端）
@@ -60,7 +60,7 @@ LEXVAULT_DB=db/lexvault.db python3 -m lexvault.mcp.server
   "mcpServers": {
     "lexvault": {
       "command": "python3",
-      "args": ["-m", "lexvault.mcp.server"],
+      "args": ["/Users/yanheng/Documents/学习/涉外法律/lexvault/run_mcp.py"],
       "cwd": "/绝对路径/lexvault",
       "env": { "LEXVAULT_DB": "/绝对路径/lexvault/db/lexvault.db" }
     }
@@ -168,7 +168,7 @@ if __name__ == "__main__":
 
 1. 安装 Python 3.12 + 本项目（`pip install -r requirements.txt`）。
 2. 准备 `db/lexvault.db`（本地生成后 scp 上传，或启动时从 Turso/GitHub 拉取）。
-3. 用 `systemd` 或 Render 进程管理器常驻：`python3 -m lexvault.mcp.server sse`。
+3. 用 `systemd` 或 Render 进程管理器常驻：`python3 run_mcp.py sse`。
 4. 反向代理 8765 端口（Caddy/Nginx）并配 HTTPS。
 5. 客户端配置 `"url": "https://your-host/mcp"`、`"transport": "streamable-http"`。
 

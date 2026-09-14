@@ -160,12 +160,20 @@ SELECT
     s.body,
     s.document_id,
     d.title AS doc_title,
+    d.original_title,
     d.doc_type,
     d.status,
+    d.issuing_body,
+    d.publish_date,
+    d.effective_date,
+    d.source_url,
     d.jurisdiction_id,
     j.code AS juris_code,
+    j.name AS juris_name,
     v.version_no,
     v.version_label,
+    v.effective_from,
+    v.effective_to,
     v.is_current
 FROM document_sections s
 JOIN legal_documents d ON d.id = s.document_id

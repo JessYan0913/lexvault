@@ -210,34 +210,114 @@ class Store:
         conn.commit()
 
     # -- 查询（MCP 层复用） ---------------------------------------------------
-    def search_local(self, query: str, limit: int = 10, jurisdiction: Optional[str] = None):
+    @staticmethod
+    def _num2cn(n: int) -> str:
+        """阿拉伯数字转中文数字（1→一，366→三百六十六）。"""
+        digits = "零一二三四五六七八九"
+        units = ["", "十", "百", "千"]
+        if n == 0:
+            return "零"
+        if n < 10:
+            return digits[n]
+        s = str(n)
+        out = ""
+        for i, ch in enumerate(s):
+            d = int(ch)
+            unit = units[len(s) - 1 - i]
+            if d == 0:
+                if out and not out.endswith("零"):
+                    out += "零"
+                continue
+            if d == 1 and unit == "十" and not out:
+                out += "十"
+            else:
+                out += digits[d] + unit
+        return out.rstrip("零")
+
+    def _article_ref(self, query: str):
+        """从查询中提取条文号引用（如“第三条”“第38条”）。
+        兼容中文数字与阿拉伯数字；返回候选条文号列表（阿拉伯+中文数字形式），无则空。"""
+        m = re.search(r"第\s*([0-9]+(?:\s*[0-9])*(?:[A-Za-z])?|[一二三四五六七八九十百零两]+)\s*条", query)
+        if not m:
+            return []
+        raw = re.sub(r"\s+", "", m.group(1))
+        cands = []
+        if raw.isdigit():
+            cands.append(f"第{raw}条")
+            try:
+                cands.append(f"第{self._num2cn(int(raw))}条")
+            except ValueError:
+                pass
+        else:
+            cands.append(f"第{raw}条")
+        return cands
+
+    def search_local(self, query: str, limit: int = 10, jurisdiction: Optional[str] = None,
+                     _expanded: bool = False):
         """条文级全文检索。
 
         策略：FTS5 trigram 对 ≥3 字的词建索引（子串匹配），但 2 字词查不到；
         因此先按空格/标点切词，≥3 字用 FTS 拿候选 + bm25 排序，
         全部词（含 2 字）再做 LIKE AND 过滤，兼顾召回与精度。
+        若查询含条文号（“第X条”），先做 section_no 精确匹配并置顶。
+        跨语言兜底：主查询无命中时，用 aliases.expand_query 扩展
+        （中文→英文译名 / 英文→中文术语 / 西里尔→拉丁转写）再搜一次。
         """
         conn = self.connect()
+        # 条文号精确定位：先尝试 section_no 精确命中（多候选：阿拉伯+中文数字）
+        art_refs = self._article_ref(query)
+        if art_refs:
+            rest = re.sub(r"第\s*([0-9]+(?:\s*[0-9])*(?:[A-Za-z])?|[一二三四五六七八九十百零两]+)\s*条", " ", query).strip()
+            sql_exact = """
+                SELECT s.section_id, s.section_no, s.heading, s.body,
+                       s.doc_title, s.original_title, s.doc_type, s.status,
+                       s.issuing_body, s.publish_date, s.effective_date,
+                       s.source_url, s.juris_code, s.juris_name,
+                       s.version_label, s.version_no, s.effective_from, s.effective_to,
+                       s.is_current
+                FROM v_sections s
+                WHERE s.section_no IN (%s)
+            """ % ",".join(["?"] * len(art_refs))
+            exact_params: list = list(art_refs)
+            if jurisdiction:
+                sql_exact += " AND s.juris_code = ?"
+                exact_params.append(jurisdiction)
+            if rest:
+                sql_exact += " AND (s.doc_title LIKE ? OR s.body LIKE ?)"
+                exact_params.extend([f"%{rest}%", f"%{rest}%"])
+            sql_exact += " LIMIT ?"
+            exact_params.append(limit)
+            try:
+                rows = conn.execute(sql_exact, exact_params).fetchall()
+                if rows:
+                    return [dict(r) for r in rows]
+            except sqlite3.Error:
+                pass  # 精确匹配失败则退回全文
         words = [w for w in re.split(r"[\s,，。;；、\u3000]+", query) if w]
         if not words:
             return []
         fts_words = [w for w in words if len(w) >= 3]
         # 注意参数顺序：LIKE 参数在前，jurisdiction 参数在后（与 SQL 中 ? 顺序一致）
-        like_params = [f"%{w}%" for w in words]
+        like_params: list = []
+        for w in words:
+            like_params.extend([f"%{w}%", f"%{w}%"])
         where = ""
         jur_params: list = []
         if jurisdiction:
             where = " AND s.juris_code = ?"
             jur_params = [jurisdiction]
-        like_conds = " AND ".join(["s.body LIKE ?"] * len(words))
+        like_conds = " AND ".join(["(s.body LIKE ? OR s.heading LIKE ?)"] * len(words))
 
         if fts_words:
             # FTS 候选（OR 连接 ≥3 字词）+ 全部词 LIKE 精排
             fts_q = " OR ".join(f'"{w}"' for w in fts_words)
             sql = f"""
                 SELECT s.section_id, s.section_no, s.heading, s.body,
-                       s.doc_title, s.doc_type, s.status, s.juris_code,
-                       s.version_label, s.is_current
+                       s.doc_title, s.original_title, s.doc_type, s.status,
+                       s.issuing_body, s.publish_date, s.effective_date,
+                       s.source_url, s.juris_code, s.juris_name,
+                       s.version_label, s.version_no, s.effective_from, s.effective_to,
+                       s.is_current
                 FROM sections_fts f
                 JOIN document_sections ds ON ds.rowid = f.rowid
                 JOIN v_sections s ON s.section_id = ds.id
@@ -259,7 +339,62 @@ class Store:
             LIMIT ?
         """
         rows = conn.execute(sql2, like_params + jur_params + [limit]).fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        if result:
+            return result
+        # 跨语言兜底：主查询无命中时扩展查询再搜一次（防止递归）
+        if not _expanded:
+            from lexvault.core.aliases import expand_query
+            for eq in expand_query(query)[1:]:
+                expanded = self.search_local(eq, limit=limit, jurisdiction=jurisdiction,
+                                             _expanded=True)
+                if expanded:
+                    for r in expanded:
+                        r["match_via"] = f"expand:{eq}"
+                    return expanded
+        # 模糊兜底：仅制裁名单法域，对 heading 做 Jaro-Winkler（处理拼写/音译变体）
+        return self._fuzzy_fallback(query, limit=limit, jurisdiction=jurisdiction)
+
+    def _fuzzy_fallback(self, query: str, limit: int = 10,
+                        jurisdiction: Optional[str] = None) -> list[dict]:
+        """制裁名单法域的拼写/音译变体兜底（TALIBAN/Taleban 类）。
+
+        仅对 heading 做 Jaro-Winkler 相似度：要求查询与主名均 ≥5 字符、
+        相似度 ≥0.90（实测：真变体 0.91-0.96，共享前缀误报 0.89），
+        避免单字符/过短 head 误报。返回带 match_via=fuzzy。
+        """
+        san_juris = {"us_ofac", "eu_sanctions", "uk_sanctions"}
+        if not jurisdiction or jurisdiction not in san_juris:
+            return []
+        q = (query or "").strip()
+        if len(q) < 5:
+            return []
+        from rapidfuzz.distance import JaroWinkler
+        best = []
+        best_score = 0.0
+        for r in self.iter_entities(jurisdiction):
+            head = (r.get("heading") or "").strip()
+            if len(head) < 5:
+                continue
+            score = JaroWinkler.similarity(q.upper(), head.upper())
+            if score > best_score:
+                best_score = score
+                best = [dict(r)]
+            elif score == best_score and score >= 0.90:
+                best.append(dict(r))
+        if best_score >= 0.90:
+            for r in best:
+                r["match_via"] = f"fuzzy:{best_score:.2f}"
+            return best[:limit]
+        return []
+
+    def iter_entities(self, jurisdiction: str):
+        """按法域流式遍历全部实体（供制裁筛查兜底，FTS 无候选时模糊匹配）。"""
+        conn = self.connect()
+        sql = "SELECT * FROM v_sections WHERE juris_code = ?"
+        cur = conn.execute(sql, (jurisdiction,))
+        for r in cur:
+            yield dict(r)
 
     def get_document(self, doc_id: str):
         conn = self.connect()
@@ -294,6 +429,50 @@ class Store:
                 "WHERE s.document_id=? AND v.is_current=1 ORDER BY s.rowid LIMIT ?",
                 (doc_id, limit),
             ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_citation_out(self, doc_id: str, section_no: str):
+        """出向引用：给定条文，找出其正文中引用的其他条文（同文档内）。"""
+        conn = self.connect()
+        row = conn.execute(
+            "SELECT s.body, s.heading FROM document_sections s "
+            "JOIN document_versions v ON v.id=s.version_id "
+            "WHERE s.document_id=? AND s.section_no=? AND v.is_current=1 LIMIT 1",
+            (doc_id, section_no),
+        ).fetchone()
+        if not row:
+            return []
+        body = row["body"] or ""
+        refs = re.findall(r"第([一二三四五六七八九十百零两0-9]+)条", body)
+        refs = list(dict.fromkeys(refs))
+        out = []
+        for ref in refs:
+            cands = [f"第{ref}条"]
+            if ref.isdigit():
+                cands.append(f"第{self._num2cn(int(ref))}条")
+            for cand in cands:
+                tgt = conn.execute(
+                    "SELECT s.section_no, s.heading FROM document_sections s "
+                    "JOIN document_versions v ON v.id=s.version_id "
+                    "WHERE s.document_id=? AND s.section_no=? AND v.is_current=1 LIMIT 1",
+                    (doc_id, cand),
+                ).fetchone()
+                if tgt:
+                    out.append({"cited": tgt["section_no"], "heading": tgt["heading"]})
+                    break
+        return out
+
+    def get_citation_in(self, doc_id: str, section_no: str, limit: int = 20):
+        """入向引用：同文档内哪些条文引用了给定条文。"""
+        conn = self.connect()
+        cands = [f"%{section_no}%"]
+        rows = conn.execute(
+            "SELECT s.section_no, s.heading, s.body FROM document_sections s "
+            "JOIN document_versions v ON v.id=s.version_id "
+            "WHERE s.document_id=? AND v.is_current=1 AND s.body LIKE ? "
+            "AND s.section_no != ? LIMIT ?",
+            (doc_id, cands[0], section_no, limit),
+        ).fetchall()
         return [dict(r) for r in rows]
 
     def list_documents(self, jurisdiction: Optional[str] = None, doc_type: Optional[str] = None,
