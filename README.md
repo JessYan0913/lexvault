@@ -2,6 +2,26 @@
 
 从公开法律数据源抓取法规/制裁名单正文、拆条入库（SQLite + FTS5），并通过 MCP 提供条文级全文检索。
 
+## ModelScope MCP 部署（Server Config）
+
+> 本配置用于 ModelScope MCP 广场“从 GitHub 仓库快速创建”，ModelScope 会自动安装 PyPI 包（lexvault-mcp）并启动服务，数据库在首次调用时从公开数据集自动下载。
+
+```json
+{
+  "mcpServers": {
+    "lexvault": {
+      "command": "uvx",
+      "args": ["lexvault-mcp@latest"],
+      "env": {
+        "LEXVAULT_DB_URL": "https://modelscope.cn/datasets/JessYan9112/lexvault-db/resolve/master/lexvault.db.gz?view=false"
+      }
+    }
+  }
+}
+```
+
+**部署检测说明**：STDIO 服务的 `command` 必须为 `npx`/`uvx`，ModelScope 从 `args` 提取包名 `lexvault-mcp@latest` 并从 PyPI 下载安装；环境变量收敛到 `env` 字段；首次调用时服务自动从 `LEXVAULT_DB_URL` 下载数据库（268MB，gzip 自动解压到本地缓存）。
+
 ## 数据源（已接入）
 
 | 法域 | 内容 | 适配器 | 拉取脚本 |
