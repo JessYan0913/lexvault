@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lexvault-mcp"
+version = "0.1.1"
+description = "涉外法律 MCP 服务：7 法域法律检索 + 美欧英三名单制裁筛查（条文级精确命中/引用链/跨语言匹配）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "JessYan0913" }]
+keywords = ["mcp", "law", "sanctions", "screening", "legal", "lexvault"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    "mcp>=1.0,<2",
+    "rapidfuzz>=3.0",
+]
+
+[project.optional-dependencies]
+# 仅数据采集/刷新需要（服务运行不需要）
+ingest = [
+    "pymupdf>=1.24",
+    "requests>=2.31",
+]
+dev = [
+    "pytest>=8",
+    "build>=1.0",
+    "twine>=5",
+]
+
+[project.scripts]
+lexvault-mcp = "lexvault.mcp.server:main"
+
+[tool.setuptools.packages.find]
+include = ["lexvault*"]
+
+[tool.setuptools.package-data]
+"lexvault" = ["py.typed"]

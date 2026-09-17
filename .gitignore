@@ -21,3 +21,4 @@ backups/
 # 临时/日志
 *.log
 /tmp/
+db/*.db.gz

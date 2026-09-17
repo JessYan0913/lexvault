@@ -8,9 +8,12 @@
 """
 from __future__ import annotations
 
+import gzip
 import logging
 import os
 import sys
+import tempfile
+import urllib.request
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -31,15 +34,53 @@ _DEFAULT_DB = os.path.join(
     "db", "lexvault.db",
 )
 _db_path = os.environ.get("LEXVAULT_DB", _DEFAULT_DB)
+_db_url = os.environ.get("LEXVAULT_DB_URL", "").strip()
 _store_inst: Store | None = None
 
 MAX_ITEMS = 50
 
 
+def _ensure_db() -> str:
+    """确保数据库可用：本地有则直接用；否则若配置了 LEXVAULT_DB_URL 则下载到缓存。
+
+    支持 .gz 压缩包（自动解压为 .db），方便大库上传到 OSS/ModelScope。
+    """
+    if os.path.exists(_db_path) and os.path.getsize(_db_path) > 0:
+        return _db_path
+    if not _db_url:
+        raise FileNotFoundError(
+            f"数据库不存在: {_db_path}。请设置 LEXVAULT_DB 指向本地库，"
+            f"或设置 LEXVAULT_DB_URL 指定远端数据库下载地址（OSS/ModelScope 直链）。"
+        )
+    cache_dir = os.path.join(tempfile.gettempdir(), "lexvault-mcp")
+    os.makedirs(cache_dir, exist_ok=True)
+    base = os.path.basename(_db_url.split("?")[0]) or "lexvault.db"
+    is_gz = base.endswith(".gz")
+    raw_path = os.path.join(cache_dir, base)
+    final_path = os.path.join(cache_dir, base[:-3] if is_gz else base)
+    if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+        print(f"[lexvault-mcp] 使用缓存数据库: {final_path}")
+        return final_path
+    print(f"[lexvault-mcp] 下载数据库: {_db_url} -> {raw_path}")
+    try:
+        urllib.request.urlretrieve(_db_url, raw_path)  # noqa: S310
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"数据库下载失败: {exc}") from exc
+    if is_gz:
+        print(f"[lexvault-mcp] 解压: {raw_path} -> {final_path}")
+        with gzip.open(raw_path, "rb") as fin, open(final_path, "wb") as fout:
+            while True:
+                chunk = fin.read(1024 * 1024)
+                if not chunk:
+                    break
+                fout.write(chunk)
+    return final_path
+
+
 def _get_store() -> Store:
     global _store_inst
     if _store_inst is None:
-        _store_inst = Store(_db_path)
+        _store_inst = Store(_ensure_db())
         _store_inst.connect()
         _store_inst.ensure_schema()
     return _store_inst
@@ -234,3 +275,38 @@ def online_npc_fetch(bbbs: str) -> dict:
 
 if __name__ == "__main__":
     mcp.run()
+
+
+def main(argv: list[str] | None = None) -> None:
+    """console script 入口：lexvault-mcp
+
+    传输模式由 LEXVAULT_TRANSPORT 环境变量控制：
+      - stdio（默认）：供本机 MCP 客户端按需拉起
+      - http：Streamable HTTP，供外部智能体经 URL 调用（服务器部署）
+      - sse：SSE 模式
+    host/port 由 LEXVAULT_HOST / LEXVAULT_PORT 控制（默认 127.0.0.1:8000）。
+    """
+    transport = os.environ.get("LEXVAULT_TRANSPORT", "stdio").lower()
+    host = os.environ.get("LEXVAULT_HOST", "127.0.0.1")
+    port = int(os.environ.get("LEXVAULT_PORT", "8000"))
+    try:
+        _ensure_db()
+    except FileNotFoundError as exc:
+        print(f"[lexvault-mcp] 错误: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if transport == "http":
+        mcp.settings.host = host
+        mcp.settings.port = port
+        print(f"[lexvault-mcp] HTTP transport: http://{host}:{port}/mcp")
+        mcp.run(transport="streamable-http")
+    elif transport == "sse":
+        mcp.settings.host = host
+        mcp.settings.port = port
+        print(f"[lexvault-mcp] SSE transport: http://{host}:{port}/sse")
+        mcp.run(transport="sse")
+    else:
+        mcp.run()
+
+
+if __name__ == "__main__":
+    main()
